@@ -166,13 +166,17 @@ def remove_all_unused_animation_actions_in_file():
 
 
 def clear_animation_action_on_armature(armature):
+    if armature.animation_data is None:
+        return
+    
     armature.animation_data.action = None
     
 
 def delete_all_nla_tracks_on_armature(armature):
-    armature.animation_data.nla_tracks
-
     track_list = []
+    if armature.animation_data is None:
+        return
+    
     for track in armature.animation_data.nla_tracks:
         track_list.append(track)
         
