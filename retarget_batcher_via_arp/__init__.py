@@ -13,11 +13,23 @@
 
 import bpy
 import os
+import re
+
+from typing import List, Dict
 
 from . import retarget_helpers
-from . import retarget_anim_export_set
+from . import anim_file_crawler
 
-RetargetAnimExportSet = retarget_anim_export_set.RetargetAnimExportSet
+AnimMetadataOrganizer = anim_file_crawler.AnimMetadataOrganizer
+AnimFileEntryMetadata = anim_file_crawler.AnimFileEntryMetadata
+AnimFileEntry = anim_file_crawler.AnimFileEntry
+AnimFileCrawler = anim_file_crawler.AnimFileCrawler
+AnimFileEntryMetadataProcessor = anim_file_crawler.AnimFileEntryMetadataProcessor
+
+
+
+def clean_group_name_to_be_filename(string):
+    return re.sub(r'[^a-zA-Z0-9_-]', '', string)
 
 class SCENE_OP_retarget_batcher(bpy.types.Operator):
 	"""Retarget a series of animations onto a target rig."""
@@ -34,59 +46,90 @@ class SCENE_OP_retarget_batcher(bpy.types.Operator):
 
 	def execute(self, context):
 		scene = bpy.context.scene
-
+		
 		# Confirm that bone map has been set up in Auto-Rig Pro.
 		if len(bpy.context.scene.bones_map_v2) == 0:
 			self.report({'ERROR'}, 'Setup target armature and bone map in Auto-Rig Pro Remap first.')
 			return {'CANCELLED'}
 
+		anim_config_csv_path = scene.retarget_batcher_anim_config_csv
+		if not os.path.exists(anim_config_csv_path):
+			self.report({'ERROR'}, 'Anim Config CSV path not specified.')
+			return {'CANCELLED'}
+
 		if not os.path.exists(bpy.context.scene.retarget_batcher_import_path):
 			self.report({'ERROR'}, 'Import path not specified.')
 			return {'CANCELLED'}
-
-		export_set_name = scene.retarget_batcher_export_set_name
-		if export_set_name == None or export_set_name == '':
-			export_set_name = 'anim_export_set'
-
-		export_set = RetargetAnimExportSet(
-			export_set_name,
-			os.path.join(bpy.context.scene.retarget_batcher_import_path),
-			loop = True
-		)
-
-		fbx_filepaths = []
-		export_set.crawl_folders_for_anims(export_set.root_path, fbx_filepaths)
-
-
-		target_rig_name = scene.target_rig
-		target_rig = scene.objects[target_rig_name]
-
-		# Clear current NLA tracks, so that we only have the new NLA tracks we're importing for this set.
-		retarget_helpers.delete_all_nla_tracks_on_armature(target_rig)
-
-		for filepath in fbx_filepaths:
-			base_file_name = os.path.splitext(os.path.basename(filepath))[0]
-			anim_name = base_file_name
-			if export_set.should_loop(filepath):
-				anim_name += '-loop'
-			retarget_helpers.push_fbx_animation_to_target_rig_nla_track(filepath, anim_name)
-
-		if not os.path.exists(bpy.context.scene.retarget_batcher_export_path):
-			self.report({'ERROR'}, f'Export path not specified.')
-			return {'CANCELLED'}
-
-		full_export_path = os.path.join(bpy.context.scene.retarget_batcher_export_path, export_set.export_name + '.glb')
-
-		bpy.ops.export_scene.gltf(
-			filepath=full_export_path,
-			export_format='GLB',
-			export_animation_mode='NLA_TRACKS',
-			export_materials='NONE',
-			export_reset_pose_bones=True
-		) 
 		
-		print("Purge unused data...")
-		bpy.ops.outliner.orphans_purge()
+		if not os.path.exists(bpy.context.scene.retarget_batcher_export_path):
+				self.report({'ERROR'}, f'Export path not specified.')
+				return {'CANCELLED'}
+
+		anim_entries = []
+		anim_crawler = AnimFileCrawler(os.path.join(bpy.context.scene.retarget_batcher_import_path))
+		anim_crawler.crawl_folders_for_anims(anim_crawler.root_path, anim_entries)
+
+		anim_metadata_list = AnimFileEntryMetadataProcessor.load_metadata_list(anim_config_csv_path)
+
+		# Find t-pose FBX file.
+		tpose_metadata: AnimFileEntryMetadata = None
+		for anim_metadata in anim_metadata_list:
+			if anim_metadata.tags == 'tpose':
+				tpose_metadata = anim_metadata
+				break
+
+		# TODO: Setup auto import of T-Pose.
+		# if tpose_metadata is None:
+		# 	self.report({'ERROR'}, 'T-Pose metadata line item not found. One metadata entry should have tags value of tpose.')
+		# 	return {'CANCELLED'}
+
+		# bpy.ops.import_scene.fbx(
+		# 	filepath = tpose_metadata., 
+		# 	automatic_bone_orientation = True,
+		# 	ignore_leaf_bones = True, 
+		# 	anim_offset = 0)
+
+		anim_metadata_organizer = AnimMetadataOrganizer()
+		anim_metadata_organizer.set_anim_metadata_list(anim_metadata_list)
+
+		for entry in anim_entries:
+			anim_entry: AnimFileEntry = entry
+			anim_metadata_entry = anim_metadata_organizer.try_find_anim_metadata_for_entry(anim_entry)
+			if anim_metadata_entry is not None:
+				anim_metadata_organizer.add_to_group(anim_metadata_entry.group, anim_entry)
+		
+		target_rig_name = scene.target_rig
+		target_rig = scene.objects.get(target_rig_name)
+
+		for group in anim_metadata_organizer.get_group_names():
+			print('>>> Starting group: ' + group)
+
+			group_file_entries = anim_metadata_organizer.get_anim_file_entries_for_group(group)
+
+			# Clear current NLA tracks, so that we only have the new NLA tracks we're importing for this set.
+			retarget_helpers.delete_all_nla_tracks_on_armature(target_rig)
+
+			for anim_file_entry in group_file_entries:
+				base_file_name = os.path.splitext(os.path.basename(anim_file_entry.full_path))[0]
+				anim_name = base_file_name
+				if anim_file_entry.should_loop and not anim_name.endswith('-loop'):
+					anim_name += '-loop'
+				retarget_helpers.push_fbx_animation_to_target_rig_nla_track(anim_file_entry.full_path, anim_name)
+				
+			# Remove unexpected characters to avoid unexpected hack attempts based on file name escape sequences.
+			sanitized_group_name = clean_group_name_to_be_filename(group)
+			full_export_path = os.path.join(bpy.context.scene.retarget_batcher_export_path, sanitized_group_name + '.glb')
+
+			bpy.ops.export_scene.gltf(
+				filepath=full_export_path,
+				export_format='GLB',
+				export_animation_mode='NLA_TRACKS',
+				export_materials='NONE',
+				export_reset_pose_bones=True
+			) 
+			
+			print("Purge unused data...")
+			bpy.ops.outliner.orphans_purge()
 
 		self.report({'INFO'}, f'Exports finished.')
 		return {'FINISHED'}
@@ -102,6 +145,11 @@ class VIEW3D_PT_retargetbatcher_via_arp(bpy.types.Panel):
 			layout = self.layout
 
 			row = layout.row()
+			row.label(text='Anim Config CSV')
+			row = layout.row()
+			row.prop(context.scene, 'retarget_batcher_anim_config_csv', text='')
+
+			row = layout.row()
 			row.label(text='Import Path')
 			row = layout.row()
 			row.prop(context.scene, 'retarget_batcher_import_path', text='')
@@ -112,17 +160,18 @@ class VIEW3D_PT_retargetbatcher_via_arp(bpy.types.Panel):
 			row.prop(context.scene, 'retarget_batcher_export_path', text='')
 
 			row = layout.row()
-			row.label(text='Export Set Name')
-			row = layout.row()
-			row.prop(context.scene, 'retarget_batcher_export_set_name', text='')
-
-			row = layout.row()
 			layout.operator('retargetbatcher_via_arp.retarget')
 
 
 classes = [SCENE_OP_retarget_batcher, VIEW3D_PT_retargetbatcher_via_arp]
 
 def register():
+	bpy.types.Scene.retarget_batcher_anim_config_csv = bpy.props.StringProperty(
+		name = 'Anim Config CSV',
+		description="Choose CSV file with animation configurations.",
+		default='',
+		subtype='FILE_PATH')
+
 	bpy.types.Scene.retarget_batcher_import_path = bpy.props.StringProperty(
 		name = 'Import Path',
 		description="Choose a directory for animations.",
@@ -134,11 +183,6 @@ def register():
 		description='Choose a directory for exports.',
 		default='',
 		subtype='DIR_PATH')
-	
-	bpy.types.Scene.retarget_batcher_export_set_name = bpy.props.StringProperty(
-		name = 'Export Set Name',
-		description='Name for exported file.',
-		default='')
 
 	for cls in classes:
 		bpy.utils.register_class(cls)
@@ -148,6 +192,6 @@ def unregister():
 	for cls in reversed(classes):
 		bpy.utils.unregister_class(cls)
 
-	del bpy.types.Scene.retarget_batcher_export_set_name
 	del bpy.types.Scene.retarget_batcher_export_path
 	del bpy.types.Scene.retarget_batcher_import_path
+	del bpy.types.Scene.retarget_batcher_anim_config_csv
