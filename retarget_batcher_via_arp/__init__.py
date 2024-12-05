@@ -96,6 +96,7 @@ class SCENE_OP_retarget_batcher(bpy.types.Operator):
 			anim_entry: AnimFileEntry = entry
 			anim_metadata_entry = anim_metadata_organizer.try_find_anim_metadata_for_entry(anim_entry)
 			if anim_metadata_entry is not None:
+				anim_entry.should_loop = anim_metadata_entry.loop
 				anim_metadata_organizer.add_to_group(anim_metadata_entry.group, anim_entry)
 		
 		target_rig_name = scene.target_rig

@@ -118,7 +118,7 @@ class AnimFileEntryMetadataProcessor:
 				list.append(AnimFileEntryMetadata(
 					filename=row['filename'],
 					group=row['group'],
-					loop=row['loop'],
+					loop=row['loop'] == 'TRUE',
 					tags=row['tags'],
 					orig_path=row['orig_path']
 				))
@@ -161,12 +161,25 @@ class AnimMetadataGroup:
 
 # Organizes and groups the animation metadata and pairs with actual files found.
 class AnimMetadataOrganizer:
-	_group_map = {}
+	_group_map: dict
 	_anim_metadata_list: List[AnimFileEntryMetadata]
+	_tpose_metadata: AnimFileEntryMetadata
+
+	def __init__(self):
+		self._group_map = {}
 
 
 	def set_anim_metadata_list(self, anim_metadata_list: List[AnimFileEntryMetadata]) -> None:
 		self._anim_metadata_list = anim_metadata_list
+
+		tpose_metadata: AnimFileEntryMetadata = None
+		for anim_metadata in anim_metadata_list:
+			# TODO: If ever using multiple tags, would need to split tags before check here.
+			if anim_metadata.tags == 'tpose':
+				tpose_metadata = anim_metadata
+				break
+
+		self._tpose_metadata = tpose_metadata
 
 
 	def try_find_anim_metadata_for_entry(self, anim_entry: AnimFileEntry) -> AnimFileEntryMetadata:
@@ -196,3 +209,4 @@ class AnimMetadataOrganizer:
 			return []
 		else:
 			return metadata_group.entries
+	
