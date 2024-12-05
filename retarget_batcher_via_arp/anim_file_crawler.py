@@ -163,7 +163,9 @@ class AnimMetadataGroup:
 class AnimMetadataOrganizer:
 	_group_map: dict
 	_anim_metadata_list: List[AnimFileEntryMetadata]
-	_tpose_metadata: AnimFileEntryMetadata
+
+	_tpose_metadata: AnimFileEntryMetadata = None
+	_tpose_file_entry: AnimFileEntry = None
 
 	def __init__(self):
 		self._group_map = {}
@@ -198,6 +200,12 @@ class AnimMetadataOrganizer:
 			metadata_group.entries = []
 			self._group_map[group] = metadata_group
 
+		# If we still need the tpose, see if this is the file for that one.
+		if self._tpose_file_entry is None:
+			metadata_entry = self.try_find_anim_metadata_for_entry(anim_entry)
+			if metadata_entry == self._tpose_metadata:
+				self._tpose_file_entry = anim_entry
+
 		metadata_group.entries.append(anim_entry)
 
 	def get_group_names(self):
@@ -210,3 +218,8 @@ class AnimMetadataOrganizer:
 		else:
 			return metadata_group.entries
 	
+	def get_tpose_anim_metadata_entry(self) -> AnimFileEntryMetadata:
+		return self._tpose_metadata
+
+	def get_tpose_anim_file_entry(self) -> AnimFileEntry:
+		return self._tpose_file_entry

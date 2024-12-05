@@ -45,14 +45,16 @@ class SCENE_OP_retarget_batcher(bpy.types.Operator):
 	
 
 	def execute(self, context):
+		base_module_path = os.path.dirname(__file__)
+
 		scene = bpy.context.scene
-		
-		# Confirm that bone map has been set up in Auto-Rig Pro.
-		if len(bpy.context.scene.bones_map_v2) == 0:
-			self.report({'ERROR'}, 'Setup target armature and bone map in Auto-Rig Pro Remap first.')
-			return {'CANCELLED'}
 
 		anim_config_csv_path = scene.retarget_batcher_anim_config_csv
+		if anim_config_csv_path == '':
+			scene.retarget_batcher_anim_config_csv = os.path.join(base_module_path, 'root_test_metadata.csv')
+			self.report({'INFO', 'Anim Config not set. Default one has been suggested.'})
+			return {'CANCELLED'}
+
 		if not os.path.exists(anim_config_csv_path):
 			self.report({'ERROR'}, 'Anim Config CSV path not specified.')
 			return {'CANCELLED'}
@@ -78,17 +80,6 @@ class SCENE_OP_retarget_batcher(bpy.types.Operator):
 				tpose_metadata = anim_metadata
 				break
 
-		# TODO: Setup auto import of T-Pose.
-		# if tpose_metadata is None:
-		# 	self.report({'ERROR'}, 'T-Pose metadata line item not found. One metadata entry should have tags value of tpose.')
-		# 	return {'CANCELLED'}
-
-		# bpy.ops.import_scene.fbx(
-		# 	filepath = tpose_metadata., 
-		# 	automatic_bone_orientation = True,
-		# 	ignore_leaf_bones = True, 
-		# 	anim_offset = 0)
-
 		anim_metadata_organizer = AnimMetadataOrganizer()
 		anim_metadata_organizer.set_anim_metadata_list(anim_metadata_list)
 
@@ -101,6 +92,39 @@ class SCENE_OP_retarget_batcher(bpy.types.Operator):
 		
 		target_rig_name = scene.target_rig
 		target_rig = scene.objects.get(target_rig_name)
+
+		if target_rig is None:
+			# If the scene is empty, we can try to auto-load the t-pose anim as the target.
+			if len(scene.objects) == 0:
+				tpose_file_entry = anim_metadata_organizer.get_tpose_anim_file_entry()
+				if not tpose_file_entry is None:
+					bpy.ops.import_scene.fbx(filepath=tpose_file_entry.full_path, automatic_bone_orientation=True, ignore_leaf_bones=True)
+					target_rig = context.active_object
+					target_rig_name = target_rig.name
+					scene.target_rig = target_rig_name
+					scene.source_rig = target_rig_name
+
+					# Import bone mapping for target rig armature.
+					bpy.ops.arp.build_bones_list()
+
+					# Import the default bone map for Synty armature.
+					synty_bonemap_path =  os.path.join(base_module_path, 'synty_remap_preset.bmap')
+					print("Attempting to load bonemap path: " + synty_bonemap_path)
+					try:
+						bpy.ops.arp.import_config(filepath=synty_bonemap_path)
+					except:
+						print("Some bones probably just didn't exist in both armatures.")
+				else: 
+					print("No T-pose FBX found.")
+
+		if target_rig is None:
+			self.report({'ERROR'}, 'Auto-Rig Pro Remap target armature not set.')
+			return {'CANCELLED'}
+
+		# Confirm that bone map has been set up in Auto-Rig Pro.
+		if len(bpy.context.scene.bones_map_v2) == 0:
+			self.report({'ERROR'}, 'Auto-Rig Pro Remap bone map is not configured.')
+			return {'CANCELLED'}
 
 		for group in anim_metadata_organizer.get_group_names():
 			print('>>> Starting group: ' + group)
